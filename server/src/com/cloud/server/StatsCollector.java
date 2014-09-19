@@ -43,6 +43,8 @@ import org.apache.cloudstack.managed.context.ManagedContextRunnable;
 import org.apache.cloudstack.storage.datastore.db.ImageStoreDao;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
+import org.apache.cloudstack.graphite.GraphiteClient;
+import org.apache.cloudstack.graphite.GraphiteException;
 
 import com.cloud.agent.AgentManager;
 import com.cloud.agent.api.Answer;
@@ -194,6 +196,10 @@ public class StatsCollector extends ManagerBase implements ComponentMethodInterc
     int vmDiskStatsInterval = 0;
     List<Long> hostIds = null;
 
+    String graphiteHost = null;
+    int graphitePort = -1;
+    String graphitePrefix = null;
+
     private ScheduledExecutorService _diskStatsUpdateExecutor;
     private int _usageAggregationRange = 1440;
     private String _usageTimeZone = "GMT";
@@ -232,6 +238,14 @@ public class StatsCollector extends ManagerBase implements ComponentMethodInterc
         volumeStatsInterval = NumbersUtil.parseLong(configs.get("volume.stats.interval"), -1L);
         autoScaleStatsInterval = NumbersUtil.parseLong(configs.get("autoscale.stats.interval"), 60000L);
         vmDiskStatsInterval = NumbersUtil.parseInt(configs.get("vm.disk.stats.interval"), 0);
+
+        graphiteHost = configs.get("stats.output.graphite.host");
+        graphitePort = NumbersUtil.parseInt(configs.get("stats.output.graphite.port"), 2003);
+        graphitePrefix = configs.get("stats.output.graphite.prefix");
+
+        if (!graphitePrefix.equals("")) {
+            graphitePrefix += ".";
+        }
 
         if (hostStatsInterval > 0) {
             _executor.scheduleWithFixedDelay(new HostCollector(), 15000L, hostStatsInterval, TimeUnit.MILLISECONDS);
@@ -407,6 +421,28 @@ public class StatsCollector extends ManagerBase implements ComponentMethodInterc
 
                                     _VmStats.put(vmId, statsInMemory);
                                 }
+
+                                if (!graphiteHost.equals("")) {
+                                    s_logger.debug("Sending VmStats to Graphite host " + graphiteHost + ":" + graphitePort);
+                                    HashMap metrics = new HashMap<String, Integer>();
+
+                                    metrics.put(graphitePrefix + "cloudstack.stats.instances." + vmId +".cpu.num", statsForCurrentIteration.getNumCPUs());
+                                    metrics.put(graphitePrefix + "cloudstack.stats.instances." + vmId +".cpu.utilization", statsForCurrentIteration.getCPUUtilization());
+                                    metrics.put(graphitePrefix + "cloudstack.stats.instances." + vmId +".network.read_kbs", statsForCurrentIteration.getNetworkReadKBs());
+                                    metrics.put(graphitePrefix + "cloudstack.stats.instances." + vmId +".network.write_kbs", statsForCurrentIteration.getNetworkWriteKBs());
+                                    metrics.put(graphitePrefix + "cloudstack.stats.instances." + vmId +".disk.write_kbs", statsForCurrentIteration.getDiskWriteKBs());
+                                    metrics.put(graphitePrefix + "cloudstack.stats.instances." + vmId +".disk.read_kbs", statsForCurrentIteration.getDiskReadKBs());
+                                    metrics.put(graphitePrefix + "cloudstack.stats.instances." + vmId +".disk.write_iops", statsForCurrentIteration.getDiskWriteIOs());
+                                    metrics.put(graphitePrefix + "cloudstack.stats.instances." + vmId +".disk.read_iops", statsForCurrentIteration.getDiskReadIOs());
+                                    try {
+                                        GraphiteClient g = new GraphiteClient(graphiteHost, graphitePort);
+                                        g.sendMetrics(metrics);
+                                        s_logger.debug("Completed sending VmStats to Graphite host " + graphiteHost + ":" + graphitePort);
+                                    } catch (GraphiteException e) {
+                                        s_logger.debug("Failed sending VmStats to Graphite host " + graphiteHost + ":" + graphitePort + ": " + e.getMessage());
+                                    }
+                                }
+
                             }
                         }
 
